@@ -5,6 +5,7 @@ import datetime as dt
 import json
 from pathlib import Path
 import cli_inputs
+from threading import Thread
 
 
 def get_credentials(account):
@@ -26,6 +27,45 @@ def auth(api_key, api_secret):
     bybit_client = HTTP(testnet=False, api_key=api_key, api_secret=api_secret)
 
     return bybit_client
+
+
+def get_spot_usdt_tickers(client):
+    symbols = client.get_instruments_info(category="spot")["result"]["list"]
+    tickers = {}
+    for row in symbols:
+        symbol = row["symbol"]
+        ticker = row["symbol"]
+        if "USDT" in symbol:
+
+            symbol = symbol.replace("USDT", "")
+
+            if "10000" in symbol:
+                symbol = symbol.replace("10000", "")
+            elif "1000" in symbol:
+                symbol = symbol.replace("1000", "")
+
+            tickers[symbol] = ticker
+
+    return tickers
+
+def get_usdt_futures_tickers(client):
+    symbols = client.get_instruments_info(category="linear")["result"]["list"]
+    tickers = {}
+    for row in symbols:
+        symbol = row["symbol"]
+        ticker = row["symbol"]
+        if "USDT" in symbol:
+
+            symbol = symbol.replace("USDT", "")
+
+            if "10000" in symbol:
+                symbol = symbol.replace("10000", "")
+            elif "1000" in symbol:
+                symbol = symbol.replace("1000", "")
+
+            tickers[symbol] = ticker
+
+    return tickers
 
 
 def get_all_spot_positions(client):
@@ -52,7 +92,7 @@ def get_all_spot_positions(client):
         print("No spot positions")
 
 
-def get_open_orders(client, spot:bool):
+def get_open_orders(client, spot:bool, display:bool):
     """
     returns all sitting orders and their avg price
 
@@ -120,8 +160,12 @@ def get_open_orders(client, spot:bool):
 
         filled_df = pd.DataFrame(open, columns=["ticker", "side", "avg_price", "unfilled qty[coins]", "unfilled usdt value"])
         filled_df.set_index("ticker", inplace=True)
-        print(f"Open limit orders || category: {category}")
-        print(filled_df.to_markdown())
+
+        if display:
+            print(f"Open limit orders || category: {category}")
+            print(filled_df.to_markdown())
+
+        return orders_by_ticker
 
     else:
         print(f"no Limit orders for {category} category")
@@ -196,6 +240,7 @@ def get_filled_orders_by_hours(client, hours_back:int, spot:bool):
 
 
         filled_df = pd.DataFrame(filled, columns=["ticker", "side", "avg_filled_prc", "filled_usdt_qty"])
+        filled_df.sort_values(by="ticker", inplace=True)
         filled_df.set_index("ticker", inplace=True)
         print(f"Filled qty's in last {hours_back} hours || category: {category}")
         print(filled_df.to_markdown())
@@ -226,11 +271,87 @@ def view_open_orders(client):
     elif category == 2:
         spot = False
     print("\n")
-    get_open_orders(client, spot=spot)
+    get_open_orders(client, spot=spot, display=True)
+
+
+def delete_orders(client, category, ticker, cancel_ids):
+    for id_ in cancel_ids:
+        client.cancel_order(category=category, symbol=ticker, orderId=id_)
+        time.sleep(0.01)
+
+
+def cancel_orders(client, spot:bool):
+
+    if spot:
+        tickers = get_spot_usdt_tickers(client)
+        category = "spot"
+    else:
+        tickers = get_usdt_futures_tickers(client)
+        category = "linear"
+
+    ticker = cli_inputs.select_ticker(tickers)
+    side = cli_inputs.select_side()
+    if side == "s":
+        side = "Sell"
+    elif side == "b":
+        side = "Buy"
+
+    open_orders = get_open_orders(client, spot=spot, display=False)
+    open_orders_for_ticker = open_orders[ticker][side]
+
+    if open_orders_for_ticker:
+        cancel_ids = []
+        for order in open_orders_for_ticker:
+            cancel_ids.append(order["orderId"])
+
+        cancel_thread = Thread(target=delete_orders, args=(client, category, ticker, cancel_ids), name=f"Cancel_{category}_{ticker}_{side}_orders").start()
+
+    else:
+        print(f"No open orders for {ticker} {side} side")
+
+
+def cancel_orders_between_prices(client, spot:bool):
+
+    if spot:
+        tickers = get_spot_usdt_tickers(client)
+        category = "spot"
+    else:
+        tickers = get_usdt_futures_tickers(client)
+        category = "linear"
+
+    ticker = cli_inputs.select_ticker(tickers)
+    side = cli_inputs.select_side()
+    if side == "s":
+        side = "Sell"
+    elif side == "b":
+        side = "Buy"
+
+    upper_price = cli_inputs.select_upper_limit_price()
+    lower_price = cli_inputs.select_lower_limit_price()
+
+    if upper_price > lower_price:
+
+        open_orders = get_open_orders(client, spot=spot, display=False)
+        open_orders_for_ticker = open_orders[ticker][side]
+
+        if open_orders_for_ticker:
+            cancel_ids = []
+            for order in open_orders_for_ticker:
+                order_price = float(order["price"])
+
+                if lower_price <= order_price <= upper_price:
+                    cancel_ids.append(order["orderId"])
+
+            cancel_thread = Thread(target=delete_orders, args=(client, category, ticker, cancel_ids), name=f"Cancel_{category}_{ticker}_{side}_orders").start()
+
+        else:
+            print(f"No open orders for {ticker} {side} side")
+    else:
+        print(f"Upper price must be higher than lower price")
 
 
 def orderOverview_bybit_personal():
-    api_key, api_secret = get_credentials(account="personal")
+    api_key, api_secret = get_credentials(account="IC_personal")
     client = auth(api_key, api_secret)
 
     exit = False
@@ -240,6 +361,7 @@ def orderOverview_bybit_personal():
               "\n 1 >> display spot positions"
               "\n 2 >> view filled orders"
               "\n 3 >> view open limit orders"
+              "\n 4 >> cancel orders"
               "\n 0 >> exit ")
         mode = int(input("input number >>> "))
         if mode == 0:
@@ -254,7 +376,37 @@ def orderOverview_bybit_personal():
         elif mode == 3:
             print("\n")
             view_open_orders(client)
+        elif mode == 4:
+            print("\n")
+            print("cancel options:"
+                  "\n 1 >> cancel all orders for specific side"
+                  "\n 2 >> cancel orders between 2 prices for specific side")
+            price_mode = int(input("Input number >>> "))
 
+            if price_mode == 1:
+                print("\n")
+                cancel_mode = int(input("Select market you want to close orders on [1-spot, 2-futures] >>> "))
+                if cancel_mode in [1,2]:
+                    if cancel_mode == 1:
+                        spot = True
+                    elif cancel_mode == 2:
+                        spot = False
+                    cancel_orders(client, spot=spot)
+                else:
+                    print("input must be 1 or 2")
+            elif price_mode == 2:
+                print("\n")
+                cancel_mode = int(input("Select market you want to close orders on [1-spot, 2-futures] >>> "))
+                if cancel_mode in [1,2]:
+                    if cancel_mode == 1:
+                        spot = True
+                    elif cancel_mode == 2:
+                        spot = False
+                    cancel_orders_between_prices(client, spot=spot)
+                else:
+                    print("input must be 1 or 2")
+            else:
+                print("Input must be 1 or 2")
 
 def main():
     exit = False
@@ -275,3 +427,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
