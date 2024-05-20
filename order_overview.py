@@ -351,7 +351,7 @@ def cancel_orders_between_prices(client, spot:bool):
 
 
 def orderOverview_bybit_personal():
-    api_key, api_secret = get_credentials(account="IC_personal")
+    api_key, api_secret = get_credentials(account="personal")
     client = auth(api_key, api_secret)
 
     exit = False
@@ -366,7 +366,7 @@ def orderOverview_bybit_personal():
         mode = int(input("input number >>> "))
         if mode == 0:
             exit = True
-            print(f"Bybit Futures >> IC_personal account - closing")
+            print(f"Bybit Futures >> personal account - closing")
         elif mode == 1:
             print("\n")
             get_all_spot_positions(client)
